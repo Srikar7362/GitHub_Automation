@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/pspsr/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/e83a65fb-73af-420f-bfe5-d860b7cd4aa3/7a42e47a-4943-4d86-be35-f4e059ea7e3b/skills/docx/**)",
+      "Bash(extract-text \"C:\\\\Users\\\\pspsr\\\\Downloads\\\\Automation_Assessment\\(BCommune\\).docx\")"
+    ]
+  }
+}

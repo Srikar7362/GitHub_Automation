@@ -1,0 +1,63 @@
+{
+  "github": {
+    "username": "",
+    "api_base_url": "https://api.github.com",
+    "request_timeout_seconds": 30,
+    "max_retries": 3,
+    "retry_backoff_seconds": 2
+  },
+  "kill_switch": {
+    "enabled": false,
+    "flag_file": "KILL_SWITCH"
+  },
+  "logging": {
+    "level": "INFO",
+    "log_file": "logs/automation.log",
+    "max_bytes": 1048576,
+    "backup_count": 3
+  },
+  "state": {
+    "directory": "state",
+    "daily_commit_file": "daily_commit_state.json",
+    "project_creator_file": "project_creator_state.json"
+  },
+  "daily_commit_agent": {
+    "tracking_file": "README.md",
+    "min_commits_per_run": 1,
+    "max_commits_per_run": 3,
+    "avoid_previous_repo": true,
+    "commit_messages": [
+      "chore: update activity log",
+      "docs: record daily activity",
+      "chore: keep repository active",
+      "chore: routine maintenance commit",
+      "chore: append activity entry",
+      "build: refresh contribution tracker"
+    ]
+  },
+  "project_creator_agent": {
+    "repo_name_prefix": "auto-project",
+    "create_private_repos": false,
+    "simple_project_interval_days": 3,
+    "complex_project_interval_days": 7,
+    "languages": ["python", "javascript"],
+    "default_language": "python",
+    "fallback_project_ideas": [
+      "A command-line tool that fetches and caches weather data",
+      "A small REST API for managing a personal reading list",
+      "A utility that converts CSV files to formatted Markdown tables",
+      "A URL shortener with click analytics",
+      "A pomodoro timer with session statistics",
+      "A static site generator for plain-text notes",
+      "A library that validates and normalizes phone numbers",
+      "A CLI password generator with configurable entropy"
+    ],
+    "external_ai": {
+      "enabled": false,
+      "provider": "huggingface",
+      "model": "mistralai/Mistral-7B-Instruct-v0.2",
+      "api_url": "https://api-inference.huggingface.co/models/",
+      "timeout_seconds": 20
+    }
+  }
+}

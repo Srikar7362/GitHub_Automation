@@ -1,0 +1,35 @@
+# Secrets - NEVER commit these
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# Local persisted state
+state/
+
+# Kill-switch flag file
+KILL_SWITCH
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+Thumbs.db

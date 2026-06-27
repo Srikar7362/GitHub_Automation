@@ -1,0 +1,40 @@
+name: Daily Commit Agent
+
+# Runs the Daily Commit Agent once per day. The schedule is in UTC.
+# Provide GH_PAT as a repository secret (a PAT with the 'repo' scope) -
+# the default GITHUB_TOKEN cannot push to your other repositories.
+on:
+  schedule:
+    - cron: "17 6 * * *" # 06:17 UTC daily
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Repository to commit to (short name or owner/repo). Leave blank to auto-select."
+        required: false
+        default: ""
+
+jobs:
+  daily-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Daily Commit Agent
+        # CI has no terminal: pass a repo if one was supplied, otherwise the
+        # agent auto-selects (--no-prompt avoids waiting on stdin).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          TARGET_REPO: ${{ github.event.inputs.repo }}
+        run: |
+          if [ -n "$TARGET_REPO" ]; then
+            python daily_commit.py --repo "$TARGET_REPO"
+          else
+            python daily_commit.py --no-prompt
+          fi
