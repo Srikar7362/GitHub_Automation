@@ -1,209 +1,199 @@
 # GitHub Activity Automation System
 
-Two configurable, idempotent automation agents that interact with the GitHub REST API: a **Daily Commit Agent** that keeps your contribution graph active by committing to the **README** of a repository you choose from an interactive list, and a **Project Creator Agent** that periodically scaffolds brand-new starter repositories. Everything is driven by a single config file, guarded by a kill switch, and logged to file and stdout.
+This is a small toolkit of two scripts that talk to the GitHub REST API and take care of some repetitive GitHub housekeeping for you:
 
----
+- **Daily Commit Agent** picks one of your repos and adds a couple of small commits to its README, so your contribution graph doesn't go quiet.
+- **Project Creator Agent** spins up a fresh starter repository now and then (README, .gitignore, and a hello-world source file) so you've always got something new on your profile.
 
-## Table of Contents
+Everything that matters is configurable from one JSON file, both scripts log what they do, and there's a kill switch if you ever want them to stop touching your account.
 
-1. [Prerequisites](#prerequisites)
-2. [Setup](#setup)
-3. [Configuration guide](#configuration-guide)
-4. [API key setup](#api-key-setup)
-5. [Running the agents](#running-the-agents)
-6. [Scheduling](#scheduling)
-7. [Kill switch](#kill-switch)
-8. [Troubleshooting](#troubleshooting)
-9. [Project structure](#project-structure)
-10. [Design decisions](#design-decisions)
-11. [Tests](#tests)
+## Contents
 
----
+- [What you need first](#what-you-need-first)
+- [Getting it running](#getting-it-running)
+- [Configuration](#configuration)
+- [Getting a GitHub token](#getting-a-github-token)
+- [Running the agents](#running-the-agents)
+- [Scheduling it](#scheduling-it)
+- [The kill switch](#the-kill-switch)
+- [When things go wrong](#when-things-go-wrong)
+- [Where everything lives](#where-everything-lives)
+- [Why I built it this way](#why-i-built-it-this-way)
+- [Tests](#tests)
 
-## Prerequisites
+## What you need first
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| Python | 3.10+ | Uses modern type-hint syntax (`str \| None`). |
-| pip | any recent | To install dependencies. |
-| Git | 2.x | Only needed to clone the repo / for scheduling. The agents themselves talk to GitHub over HTTP and do **not** shell out to Git. |
-| A GitHub account | — | With a Personal Access Token (see [API key setup](#api-key-setup)). |
+You'll need:
 
-Python dependencies (installed via `requirements.txt`):
+- **Python 3.10 or newer.** The code uses the newer type-hint syntax (`str | None`), so 3.9 won't run it.
+- **Git**, but only to clone this repo. The agents themselves never shell out to Git; they do everything over HTTP through the GitHub API.
+- **A GitHub account and a Personal Access Token.** How to get one is covered in [Getting a GitHub token](#getting-a-github-token).
 
-- `requests` — HTTP client for the GitHub REST API.
-- `python-dotenv` — loads the `.env` file.
-- `pytest` — test runner (only needed to run the test suite).
+There are only three Python dependencies, all in `requirements.txt`:
 
-No OS-specific dependencies; runs on Windows, macOS and Linux.
+- `requests` for the HTTP calls
+- `python-dotenv` to read your `.env` file
+- `pytest`, which you only need if you want to run the tests
 
----
+No native libraries or OS-specific tricks, so it works the same on Windows, macOS and Linux.
 
-## Setup
+## Getting it running
 
 ```bash
-# 1. Clone the repository
+# 1. Clone it
 git clone <your-repo-url>
 cd GitHub_Automation
 
-# 2. Create and activate a virtual environment
+# 2. Make a virtual environment and activate it
 python -m venv .venv
-# macOS / Linux:
-source .venv/bin/activate
-# Windows (PowerShell):
-.venv\Scripts\Activate.ps1
+source .venv/bin/activate        # macOS / Linux
+# .venv\Scripts\Activate.ps1     # Windows PowerShell
 
-# 3. Install dependencies
+# 3. Install the dependencies
 pip install -r requirements.txt
 
-# 4. Create your .env from the template and add your token
-cp .env.example .env          # Windows: copy .env.example .env
-#   then edit .env and set GITHUB_TOKEN=...
+# 4. Set up your token
+cp .env.example .env             # Windows: copy .env.example .env
+# now open .env and paste your token into GITHUB_TOKEN=
 
-# 5. (Optional) set your username and tweak settings in config.json
+# 5. (optional) open config.json and adjust anything you like
 
-# 6. Verify the install
+# 6. Make sure it's all wired up correctly
 pytest -q
 ```
 
----
+If the tests pass you're good to go.
 
-## Configuration guide
+## Configuration
 
-All tunable parameters live in [`config.json`](config.json) — no values are hardcoded in the Python source. Paths are resolved relative to the project root.
+Everything lives in [`config.json`](config.json). I tried hard not to bury any numbers in the code, so if you want to change a behavior, this is the one place to look. Any file paths in here are relative to the project root, so it doesn't matter what directory you run the scripts from.
 
-### `github`
+Here's what each section does.
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `username` | `""` | Optional. Informational only; the authenticated user is resolved from the token. |
-| `api_base_url` | `https://api.github.com` | GitHub API root. Change only for GitHub Enterprise. |
-| `request_timeout_seconds` | `30` | Per-request timeout. |
-| `max_retries` | `3` | Retry attempts for network/5xx errors. |
-| `retry_backoff_seconds` | `2` | Base backoff; wait grows linearly per attempt. |
+**`github`** — how the API client behaves.
 
-### `kill_switch`
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `username` | `""` | Optional. Not actually required since the token tells us who you are; it's just there for reference. |
+| `api_base_url` | `https://api.github.com` | Only change this if you're on GitHub Enterprise. |
+| `request_timeout_seconds` | `30` | How long to wait on a single request before giving up. |
+| `max_retries` | `3` | How many times to retry on a network hiccup or a 5xx. |
+| `retry_backoff_seconds` | `2` | The base wait between retries (it grows a bit with each attempt). |
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `enabled` | `false` | If `true`, both agents exit immediately without any API calls. |
-| `flag_file` | `KILL_SWITCH` | If a file with this name exists in the project root, the agents also halt. |
+**`kill_switch`** — the panic button (more on this [below](#the-kill-switch)).
 
-### `logging`
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `enabled` | `false` | Set to `true` and both agents stop before doing anything. |
+| `flag_file` | `KILL_SWITCH` | If a file with this name shows up in the project root, that also stops them. |
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `level` | `INFO` | Log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `log_file` | `logs/automation.log` | Rotating log file path. |
-| `max_bytes` | `1048576` | Rotate the log after this many bytes (1 MB). |
-| `backup_count` | `3` | Number of rotated log files to keep. |
+**`logging`**
 
-### `state`
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `level` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`. |
+| `log_file` | `logs/automation.log` | Where the rotating log file goes. |
+| `max_bytes` | `1048576` | Roll the log over once it hits this size (1 MB). |
+| `backup_count` | `3` | How many old log files to keep around. |
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `directory` | `state` | Directory for persisted state files. |
-| `daily_commit_file` | `daily_commit_state.json` | Daily Commit Agent state filename. |
-| `project_creator_file` | `project_creator_state.json` | Project Creator Agent state filename. |
+**`state`** — where the agents remember things between runs.
 
-### `daily_commit_agent`
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `directory` | `state` | Folder for the state files. |
+| `daily_commit_file` | `daily_commit_state.json` | The commit agent's memory. |
+| `project_creator_file` | `project_creator_state.json` | The creator agent's memory. |
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `tracking_file` | `README.md` | File committed to in the target repo. Activity entries are appended under an "Activity Log" section. Created if missing. |
-| `min_commits_per_run` | `1` | Minimum commits per run. |
-| `max_commits_per_run` | `3` | Maximum commits per run. |
-| `avoid_previous_repo` | `true` | Only used for automatic (non-interactive) selection: avoids re-targeting the last run's repo when alternatives exist. |
-| `commit_messages` | list | Pool of commit messages; one is drawn at random per commit. |
+**`daily_commit_agent`**
 
-### `project_creator_agent`
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `tracking_file` | `README.md` | The file that gets committed to. Entries are appended under an "Activity Log" heading, and the file is created if it isn't there. |
+| `min_commits_per_run` | `1` | Fewest commits in a single run. |
+| `max_commits_per_run` | `3` | Most commits in a single run. |
+| `avoid_previous_repo` | `true` | Only matters when the agent picks a repo for you (non-interactive runs): it tries not to hit the same repo twice in a row. |
+| `commit_messages` | a list | The pool it picks commit messages from, one per commit. |
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `repo_name_prefix` | `auto-project` | Prefix for generated repo names (e.g. `auto-project-4821`). |
-| `create_private_repos` | `false` | If `true`, created repos are private. The assessment asks for public repos. |
-| `simple_project_interval_days` | `3` | Minimum days between project creations (the run-interval guard). |
-| `complex_project_interval_days` | `7` | Reserved for a future "complex project" tier. |
-| `languages` | `["python","javascript"]` | Languages selectable for starter projects. |
-| `default_language` | `python` | Language used when `--language` is omitted. |
-| `fallback_project_ideas` | list | Built-in ideas used when external AI is off/unavailable. |
-| `external_ai.enabled` | `false` | Enable external AI idea generation. |
-| `external_ai.provider` | `huggingface` | Provider label (informational). |
-| `external_ai.model` | `mistralai/Mistral-7B-Instruct-v0.2` | Model for the HuggingFace Inference API. |
-| `external_ai.api_url` | HF inference URL | Base URL; the model name is appended. |
-| `external_ai.timeout_seconds` | `20` | Timeout for the external AI call. |
+**`project_creator_agent`**
 
----
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `repo_name_prefix` | `auto-project` | New repos are named like `auto-project-4821`. |
+| `create_private_repos` | `false` | Leave it off for public repos. |
+| `simple_project_interval_days` | `3` | Won't create another project until this many days have passed. |
+| `complex_project_interval_days` | `7` | Placeholder for a future second tier; not used yet. |
+| `languages` | `["python", "javascript"]` | Which starters you're allowed to ask for. |
+| `default_language` | `python` | Used when you don't pass `--language`. |
+| `fallback_project_ideas` | a list | The ideas it falls back on when the AI is off or unreachable. |
+| `external_ai.enabled` | `false` | Turn on AI-generated project ideas. |
+| `external_ai.provider` | `huggingface` | Just a label. |
+| `external_ai.model` | `mistralai/Mistral-7B-Instruct-v0.2` | The HuggingFace model to call. |
+| `external_ai.api_url` | HF inference URL | Base URL; the model name gets tacked on. |
+| `external_ai.timeout_seconds` | `20` | How long to wait on the AI before falling back. |
 
-## API key setup
+## Getting a GitHub token
 
-The agents authenticate with a **GitHub Personal Access Token (PAT)** read from the environment — it is never hardcoded or committed.
+The scripts authenticate with a Personal Access Token that they read from your environment. It's never written into the code or committed anywhere.
 
-1. Sign in to GitHub → **Settings** → **Developer settings** → **Personal access tokens**.
-2. Choose a token type:
-   - **Fine-grained token** (recommended): set **Repository access** to *All repositories* (or select the ones you want), and under **Permissions → Repository permissions** grant **Contents: Read and write** and **Administration: Read and write** (the latter is needed to create repositories).
-   - **Classic token**: select the **`repo`** scope (full control of private repositories). Only add **`delete_repo`** if you build a cleanup feature — this project does not require it.
-3. Generate the token and **copy it immediately** (you cannot view it again).
-4. Put it in your `.env` file:
+Go to GitHub, then **Settings → Developer settings → Personal access tokens**. You've got two options:
 
-   ```dotenv
-   GITHUB_TOKEN=ghp_your_real_token_here
-   ```
+- **Classic token** is the simplest. Tick the single **`repo`** scope and you're done. (Don't bother with `delete_repo` unless you add a cleanup feature later; this project doesn't need it.)
+- **Fine-grained token** if you'd rather scope things tightly. Give it access to the repositories you care about, then grant **Contents: Read and write** plus **Administration: Read and write**. You need that second one because creating a repo counts as an admin action. Heads up: if you forget Contents write, listing repos works fine but the first commit fails with a 403, which is a confusing error to debug.
 
-   `.env` is listed in [`.gitignore`](.gitignore) and must never be committed.
+Generate the token, copy it right away (GitHub won't show it again), and drop it into `.env`:
 
-> **Minimum scopes:** `repo` (classic) or *Contents: write* + *Administration: write* (fine-grained). The Project Creator needs repository-creation permission; the Daily Commit Agent needs contents write.
+```dotenv
+GITHUB_TOKEN=ghp_your_real_token_here
+```
 
----
+`.env` is already in `.gitignore`, so it won't get committed. Please keep it that way.
 
 ## Running the agents
 
-Activate your virtual environment first, then:
+Activate your virtualenv first, then run whichever one you want.
 
 ### Daily Commit Agent
 
 ```bash
-# Normal run - lists your repos and asks which one to commit to
+# Normal run: it lists your repos and asks which one to commit to
 python daily_commit.py
 
-# Target a specific repo by name and skip the prompt (great for automation)
+# Commit to a specific repo without being asked
 python daily_commit.py --repo front-end
 python daily_commit.py --repo Srikar7362/front-end
 
-# Skip the prompt and let the agent auto-select a repo
+# Let it choose a repo for you, no questions asked
 python daily_commit.py --no-prompt
 
-# Bypass the once-per-day guard (for testing)
+# Run again on the same day (it normally won't)
 python daily_commit.py --force
 ```
 
-What it does: authenticates, lists your non-forked / non-archived repositories, and **asks you to choose one** (enter the number shown, or `0` to cancel). It then makes 1–3 commits that append timestamped entries to that repo's **`README.md`** (under an "Activity Log" section). It records the date and target so re-running the same day does nothing.
+When you run it, it authenticates, pulls your repositories (skipping forks and archived ones), and shows you a numbered list to pick from. Once you choose, it makes somewhere between 1 and 3 commits, each one appending a timestamped line to that repo's `README.md` under an "Activity Log" section. After a successful run it records the date and which repo it used, so running it again later the same day just exits without doing anything.
 
-**Selecting the repository:**
-- **Interactive** (default): you get a numbered menu and pick one.
-- **`--repo NAME`**: target a specific repo (by short name or `owner/repo`), no prompt.
-- **`--no-prompt`** or **no terminal** (e.g. cron/CI): the agent auto-selects a repo, avoiding the previous run's repo when possible.
+A few ways to pick the target repo:
+
+- By default you get the interactive menu (type the number, or `0` to back out).
+- `--repo NAME` skips the menu and goes straight for that repo. You can use the short name or the full `owner/repo`.
+- `--no-prompt` (or just having no terminal, like in cron) lets it pick one itself, avoiding last run's repo where it can.
 
 ### Project Creator Agent
 
 ```bash
-# Use the default language from config; no-op if not yet due.
-# Shows a confirmation prompt before creating.
+# Normal run: proposes a project and asks you to confirm
 python project_creator.py
 
-# Choose a language explicitly
+# Pick the language up front
 python project_creator.py --language javascript
 
-# Skip the confirmation prompt and create immediately (for automation)
+# Don't ask, just create it (handy for automation)
 python project_creator.py --yes
 
-# Bypass the interval guard and create now (for testing)
+# Ignore the "wait N days" rule and create now
 python project_creator.py --force
 ```
 
-What it does: proposes a new public repo named `<prefix>-<random>` with a generated project idea, **asks you to confirm or edit it**, then creates the repo and seeds it with `README.md`, `.gitignore` and a starter source file for the chosen language. It optionally generates the idea via an external AI (with graceful fallback), and records the repo so it is never recreated.
-
-**Confirmation prompt:** before creating anything, the agent shows the proposed name, language and idea and lets you accept, edit any field, or cancel:
+This one comes up with a repo name and a project idea, then stops and shows you what it's about to do before creating anything:
 
 ```
 About to create a new repository:
@@ -217,122 +207,105 @@ About to create a new repository:
 Choose:
 ```
 
-- Press **`y`** to create, **`0`** to cancel.
-- Enter **`1`**, **`2`** or **`3`** to edit the name, language or idea (editing the idea marks its source as *user-provided*; a blank name auto-generates a new one).
-- The prompt is skipped with **`--yes`**, or automatically when there is no terminal (cron/CI).
+Hit `y` to go ahead or `0` to bail. If something's not right, type `1`, `2` or `3` to edit the name, language or idea before you commit to it. (Editing the idea flips its source to "user-provided", and leaving the name blank just generates a fresh one.) Once you confirm, it creates the repo and drops in a README, a language-appropriate `.gitignore`, and a starter source file (`main.py` for Python, `index.js` for JavaScript). It also remembers what it created so it never makes the same thing twice.
 
----
+If you'd rather not be asked, `--yes` skips the prompt, and it's skipped automatically when there's no terminal attached.
 
-## Scheduling
+## Scheduling it
 
-Pick whichever fits your environment. The agents are safe to run repeatedly — their idempotency / interval guards make extra runs no-ops.
+Both agents are safe to run on a timer because they won't double up: the commit agent is once-a-day, and the creator only fires every few days. Pick whatever scheduler suits you.
 
-### GitHub Actions (included)
+### GitHub Actions
 
-Two workflows live in [`.github/workflows/`](.github/workflows). They run on a cron and can be triggered manually from the **Actions** tab.
+There are two workflows in [`.github/workflows/`](.github/workflows) already set up to run on a cron, and you can also kick them off by hand from the Actions tab.
 
-1. In your repo: **Settings → Secrets and variables → Actions → New repository secret**.
-2. Add `GH_PAT` = your PAT (the built-in `GITHUB_TOKEN` cannot push to *other* repos, so a PAT is required). Optionally add `HUGGINGFACE_API_TOKEN`.
-3. The workflows are enabled automatically once pushed.
+To make them work, add your token as a secret under **Settings → Secrets and variables → Actions**, named `GH_PAT`. (The `GITHUB_TOKEN` that Actions hands you automatically can't push to your *other* repos, which is why you need your own PAT here.) If you've turned on AI ideas, add `HUGGINGFACE_API_TOKEN` too.
 
-> **Note on state in CI:** the `state/` directory is git-ignored and CI runners are ephemeral, so the once-per-day / interval guards reset each run. That is fine because the cron itself controls frequency (the daily workflow runs once per day). For *local* scheduling, on-disk state fully enforces idempotency.
+One thing worth knowing: the `state/` folder is gitignored and Actions runners are throwaway, so the "already ran today" memory resets between runs. That's fine in practice because the cron schedule itself controls how often things happen. The on-disk memory only really matters when you run locally.
 
 ### cron (Linux / macOS)
 
 ```cron
-# Daily commit at 09:00; project creator each Monday at 09:05.
-# cron has no terminal, so pass --repo (or rely on automatic selection).
-0 9 * * *  cd /path/to/GitHub_Automation && .venv/bin/python daily_commit.py --repo front-end >> logs/cron.log 2>&1
-5 9 * * 1  cd /path/to/GitHub_Automation && .venv/bin/python project_creator.py --yes >> logs/cron.log 2>&1
+# Commit each morning at 09:00, create a project on Monday mornings.
+# There's no terminal here, so give it a repo or let it auto-pick.
+
 ```
 
 ### Task Scheduler (Windows)
 
 ```powershell
-# Daily commit every day at 09:00
 schtasks /Create /SC DAILY /TN "GH Daily Commit" /ST 09:00 ^
   /TR "cmd /c cd /d C:\path\to\GitHub_Automation && .venv\Scripts\python.exe daily_commit.py --repo front-end"
 ```
 
----
+## The kill switch
 
-## Kill switch
+If you ever want both agents to stop dead, there are two ways and either one works. They check this before making a single API call, so nothing happens to your account.
 
-Two ways to halt **both** agents immediately — they exit cleanly *before* making any API calls:
-
-1. **Config flag:** set `"enabled": true` under `kill_switch` in `config.json`.
-2. **Flag file:** create an empty file named `KILL_SWITCH` in the project root:
+1. Set `"enabled": true` in the `kill_switch` section of `config.json`, or
+2. Drop an empty file named `KILL_SWITCH` in the project root:
    ```bash
    touch KILL_SWITCH        # Windows: type nul > KILL_SWITCH
    ```
-   Delete the file (or set the flag back to `false`) to resume.
 
----
+Remove the file (or set the flag back to `false`) when you want them running again.
 
-## Troubleshooting
+## When things go wrong
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `GITHUB_TOKEN is not set` (exit 2) | No token in environment / `.env`. | Create `.env` from `.env.example` and set `GITHUB_TOKEN`. Confirm `python-dotenv` is installed. |
-| `GitHub rejected the token (401)` | Token invalid, expired, or wrong scopes. | Regenerate the PAT with the `repo` scope (classic) or Contents + Administration write (fine-grained). |
-| `... failed (403)` when creating a repo | Token lacks repo-creation permission, or a repo with that name exists. | Grant Administration/`repo` permission; the name generator avoids known duplicates but a manual collision can still occur — just re-run. |
-| Agent says *"Already ran today"* and does nothing | Idempotency guard already recorded today's run. | Use `--force`, or delete `state/daily_commit_state.json`. |
-| *"Not due to create a project yet"* | Within the configured interval. | Use `--force`, lower `simple_project_interval_days`, or delete `state/project_creator_state.json`. |
-| `Rate limited; waiting ...` in logs | Hit GitHub's hourly rate limit. | The client waits automatically for the reset; reduce run frequency if persistent. |
-| External AI never used | `external_ai.enabled` is `false` or no `HUGGINGFACE_API_TOKEN`. | Enable it in config and set the token; otherwise the built-in idea list is used (this is expected, not an error). |
+A few things that tripped me up, and how to fix them:
 
----
+- **`GITHUB_TOKEN is not set` and it exits.** There's no token in your environment. Copy `.env.example` to `.env`, put your token in, and double-check `python-dotenv` got installed.
+- **`GitHub rejected the token (401)`.** The token's wrong, expired, or doesn't have the right scopes. Make a new one with `repo` (classic) or Contents + Administration write (fine-grained).
+- **A 403 when committing or creating a repo.** Almost always a permissions thing: the token can read but not write. Fix the scopes as above. The newer error message will spell out exactly what's missing. (If it's specifically about creating a repo, a name collision is also possible, but that's rare since names are random; just run it again.)
+- **"Already ran today" and nothing happens.** That's the once-a-day guard doing its job. Use `--force`, or delete `state/daily_commit_state.json` if you want a clean slate.
+- **"Not due to create a project yet".** You're inside the interval window. Use `--force`, lower `simple_project_interval_days`, or delete `state/project_creator_state.json`.
+- **`Rate limited; waiting ...` in the log.** You hit GitHub's hourly limit. The client waits for the reset on its own; if it keeps happening, run things less often.
+- **The AI ideas never seem to kick in.** That's expected unless you've set `external_ai.enabled` to `true` and provided a `HUGGINGFACE_API_TOKEN`. Without those it just uses the built-in idea list, which is by design, not a bug.
 
-## Project structure
+## Where everything lives
 
 ```
 GitHub_Automation/
-├── daily_commit.py            # CLI entry point for the Daily Commit Agent
-├── project_creator.py         # CLI entry point for the Project Creator Agent
-├── config.json                # All configuration (the single source of truth)
-├── requirements.txt           # Pinned Python dependencies
-├── .env.example               # Template for secrets (copy to .env)
-├── .gitignore                 # Excludes .env, logs/, state/, KILL_SWITCH, venvs
-├── README.md                  # This file
-├── ghauto/                    # Shared package used by both agents
+├── daily_commit.py            # entry point for the Daily Commit Agent
+├── project_creator.py         # entry point for the Project Creator Agent
+├── config.json                # all the settings
+├── requirements.txt           # pinned dependencies
+├── .env.example               # copy this to .env and add your token
+├── .gitignore                 # keeps .env, logs/, state/ etc. out of git
+├── README.md                  # you're reading it
+├── ghauto/                    # the shared code both agents use
 │   ├── __init__.py
-│   ├── bootstrap.py           # Loads env/config, builds client, checks kill switch
-│   ├── config.py              # Config loading and path resolution
-│   ├── logging_setup.py       # Rotating file + stdout logging with timestamps
-│   ├── killswitch.py          # Kill-switch detection (config flag or flag file)
-│   ├── state.py               # JSON-backed persistent state store
-│   ├── github_client.py       # GitHub REST API v3 client (retries, rate limits)
-│   ├── ideas.py               # External-AI idea generation with graceful fallback
-│   ├── commit_agent.py        # Daily Commit Agent logic (pure helpers + run)
-│   └── creator_agent.py       # Project Creator Agent logic (pure helpers + run)
-├── tests/                     # Pytest suite
-│   ├── conftest.py            # Shared fixtures
-│   ├── test_repo_selection.py # Repo selection + commit-count logic
-│   └── test_idempotency.py    # Once-per-day guard, scheduling, state persistence
-└── .github/workflows/         # Optional GitHub Actions schedules
+│   ├── bootstrap.py           # loads env + config, builds the client, checks the kill switch
+│   ├── config.py              # reading config.json and resolving paths
+│   ├── logging_setup.py       # file + console logging with timestamps
+│   ├── killswitch.py          # the kill-switch check
+│   ├── state.py               # the little JSON state store
+│   ├── github_client.py       # the GitHub API client (retries, rate limits, errors)
+│   ├── ideas.py               # AI idea generation with a safe fallback
+│   ├── commit_agent.py        # Daily Commit Agent logic
+│   └── creator_agent.py       # Project Creator Agent logic
+├── tests/
+│   ├── conftest.py
+│   ├── test_repo_selection.py
+│   └── test_idempotency.py
+└── .github/workflows/
     ├── daily-commit.yml
     └── project-creator.yml
 ```
 
-Generated at runtime (git-ignored): `logs/`, `state/`.
+`logs/` and `state/` show up once you run things; both are gitignored.
 
----
+## Why I built it this way
 
-## Design decisions
+A few decisions worth explaining:
 
-- **Raw `requests` over PyGithub.** Keeps dependencies minimal and makes every API interaction explicit and reviewable. The client centralizes auth, retries with linear backoff, rate-limit waiting and error handling.
-- **Commits via the Contents API, no local clone.** Each `PUT` to a file is exactly one commit, so making *N* commits is *N* updates to the tracking file — no Git binary or working tree required, which keeps CI and cross-platform use trivial.
-- **JSON files for state.** The data is tiny (a few keys, one short list) and benefits from being human-readable and trivially resettable. Writes are atomic (temp file + rename). SQLite would be the next step only if state grew large or needed concurrency.
-- **Pure helpers separated from I/O.** Selection, counting, scheduling and name generation are side-effect-free functions, which is what the tests exercise directly.
-- **Fail loud in logs, never crash silently.** Every agent run is wrapped in a top-level guard that logs the error and returns a non-zero exit code.
+- **I used plain `requests` instead of PyGithub.** It's one fewer dependency and it keeps every API call right there in front of you, which makes the code easier to read and reason about. All the auth, retry, rate-limit and error handling lives in one client class.
+- **Commits go through the Contents API, no local clone.** Each write to a file is its own commit, so "make 3 commits" is just three updates to the README. No Git binary, no working copy, which makes the whole thing trivial to run in CI or on any machine.
+- **State is just JSON files.** There's barely any of it (a date, a repo name, a short list), so a database felt like overkill. JSON is easy to read and easy to wipe when you're testing. Writes are done with a temp-file-then-rename so a crash can't leave you with a half-written file. If this ever needed to track thousands of records or handle concurrent writers, SQLite would be the obvious next step.
+- **The logic that's worth testing is kept separate from the I/O.** Things like repo selection, commit counts, scheduling and name generation are plain functions with no side effects, so the tests can hit them directly without mocking the whole world.
+- **Nothing fails silently.** Every run is wrapped so that any error gets logged properly and the script exits with a non-zero code instead of just disappearing.
 
-### Assumptions
-
-- "Public repositories" is the default for created projects (toggleable via `create_private_repos`).
-- The once-per-day guard uses **UTC** dates for consistency across machines/CI.
-- The "complex project" tier (`complex_project_interval_days`) is wired into config but the current creator produces a single starter tier; extending it is straightforward.
-
----
+A couple of assumptions I made along the way: created repos are public by default (flip `create_private_repos` if you don't want that), the once-a-day check uses UTC so it behaves the same everywhere, and the "complex project" interval is in the config but not wired up yet since the creator currently does a single tier.
 
 ## Tests
 
@@ -340,4 +313,4 @@ Generated at runtime (git-ignored): `logs/`, `state/`.
 pytest -q
 ```
 
-Covers the bonus-rubric items — the **idempotency logic** (once-per-day guard, state persistence across restarts, creator interval scheduling) and the **repository selection function** (empty list, single-repo, previous-repo avoidance, deterministic seeding, commit-count bounds) — plus repo lookup, README activity-log formatting and the project-creation confirmation flow. 28 tests, no network access required.
+There are 28 tests and none of them touch the network. They cover the parts the rubric specifically calls out, the once-a-day idempotency logic (including that state survives a restart) and the repo selection function (empty lists, a single repo, avoiding the previous one, deterministic picks with a seeded RNG, commit-count bounds), plus repo lookup, the README activity-log formatting, and the project-creation confirmation flow.
