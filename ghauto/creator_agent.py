@@ -190,6 +190,75 @@ def _starter_source(language: str, name: str, idea: str) -> tuple[str, str]:
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
+def propose_project(
+    config: dict[str, Any],
+    state: StateStore,
+    logger: Any,
+    *,
+    language: str | None = None,
+) -> dict[str, Any]:
+    """Build a project proposal (name, language, idea) without creating anything.
+
+    Shared by the CLI and the web UI so the user can review/edit before
+    committing to creation. Reads state only; performs no GitHub writes.
+    """
+    agent_cfg = config["project_creator_agent"]
+    chosen_language = choose_language(config, language)
+    created: list[str] = list(state.get(_CREATED_PROJECTS, []))
+    prefix = agent_cfg.get("repo_name_prefix", "auto-project")
+    name = generate_repo_name(prefix, created)
+    idea, source = generate_idea(config, logger)
+    logger.info("Proposed %s project: %s (idea source: %s)", chosen_language, name, source)
+    return {"name": name, "language": chosen_language, "idea": idea, "source": source}
+
+
+def create_project(
+    config: dict[str, Any],
+    client: GitHubClient,
+    state: StateStore,
+    logger: Any,
+    *,
+    name: str,
+    language: str,
+    idea: str,
+    source: str = "user-provided",
+) -> dict[str, Any]:
+    """Create the repository, seed its files and record it. Returns repo info.
+
+    Validates the language and ensures a non-empty name. Raises ``ValueError``
+    on bad input and ``GitHubError`` on API failures (callers handle these).
+    """
+    agent_cfg = config["project_creator_agent"]
+    language = choose_language(config, language)  # validates against config
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Repository name must not be empty.")
+
+    user = client.get_authenticated_user()
+    owner = user["login"]
+
+    logger.info("Creating %s repository %r ...", language, name)
+    repo = client.create_repo(
+        name,
+        description=idea[:300],
+        private=agent_cfg.get("create_private_repos", False),
+        auto_init=True,
+    )
+    repo_full = repo["full_name"]
+    branch = repo.get("default_branch") or "main"
+    logger.info("Created repository: %s", repo_full)
+
+    _seed_files(client, owner, name, branch, language, idea, source, name, logger)
+
+    created: list[str] = list(state.get(_CREATED_PROJECTS, []))
+    created.append(repo_full)
+    state.set(_CREATED_PROJECTS, created)
+    state.set(_LAST_CREATED_DATE, datetime.now(timezone.utc).date().isoformat())
+    state.save()
+    logger.info("Project creation complete: %s", repo.get("html_url", repo_full))
+    return repo
+
+
 def run(
     config: dict[str, Any],
     client: GitHubClient,
@@ -200,7 +269,7 @@ def run(
     force: bool = False,
     interactive: bool = True,
 ) -> int:
-    """Execute the Project Creator Agent. Returns a process exit code.
+    """Execute the Project Creator Agent (CLI). Returns a process exit code.
 
     Args:
         language: Starter language (validated against config); ``None`` uses
@@ -221,17 +290,11 @@ def run(
         return 0
 
     try:
-        chosen_language = choose_language(config, language)
-
-        user = client.get_authenticated_user()
-        owner = user["login"]
-
-        created: list[str] = list(state.get(_CREATED_PROJECTS, []))
-        prefix = agent_cfg.get("repo_name_prefix", "auto-project")
-        name = generate_repo_name(prefix, created)
-
-        idea, source = generate_idea(config, logger)
-        logger.info("Proposed %s project: %s (idea source: %s)", chosen_language, name, source)
+        proposal = propose_project(config, state, logger, language=language)
+        name = proposal["name"]
+        chosen_language = proposal["language"]
+        idea = proposal["idea"]
+        source = proposal["source"]
 
         if interactive and sys.stdin.isatty():
             decision = confirm_project(
@@ -239,9 +302,9 @@ def run(
                 chosen_language,
                 idea,
                 source,
-                prefix=prefix,
+                prefix=agent_cfg.get("repo_name_prefix", "auto-project"),
                 languages=agent_cfg.get("languages", [chosen_language]),
-                existing=created,
+                existing=list(state.get(_CREATED_PROJECTS, [])),
                 private=agent_cfg.get("create_private_repos", False),
                 logger=logger,
             )
@@ -250,24 +313,16 @@ def run(
                 return 0
             name, chosen_language, idea, source = decision
 
-        logger.info("Creating %s repository %r ...", chosen_language, name)
-        repo = client.create_repo(
-            name,
-            description=idea[:300],
-            private=agent_cfg.get("create_private_repos", False),
-            auto_init=True,
+        create_project(
+            config,
+            client,
+            state,
+            logger,
+            name=name,
+            language=chosen_language,
+            idea=idea,
+            source=source,
         )
-        repo_full = repo["full_name"]
-        branch = repo.get("default_branch") or "main"
-        logger.info("Created repository: %s", repo_full)
-
-        _seed_files(client, owner, name, branch, chosen_language, idea, source, name, logger)
-
-        created.append(repo_full)
-        state.set(_CREATED_PROJECTS, created)
-        state.set(_LAST_CREATED_DATE, today.isoformat())
-        state.save()
-        logger.info("Project creation complete: %s", repo.get("html_url", repo_full))
         return 0
 
     except ValueError as exc:

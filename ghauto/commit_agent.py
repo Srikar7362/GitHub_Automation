@@ -273,11 +273,15 @@ def _make_commits(
     messages: list[str],
     count: int,
     logger: Any,
-) -> None:
-    """Append ``count`` activity entries to the README, one commit each."""
+) -> str | None:
+    """Append ``count`` activity entries to the README, one commit each.
+
+    Returns the URL of the last commit (or ``None`` if unavailable).
+    """
     existing = client.get_file(owner, repo, tracking_file, ref=branch)
     content = existing.get("decoded_content", "") if existing else ""
     sha = existing.get("sha") if existing else None
+    last_commit_url: str | None = None
 
     for index in range(1, count + 1):
         content = _append_activity(content, _activity_entry(index, count))
@@ -293,4 +297,63 @@ def _make_commits(
         )
         # The new blob sha is required for the next update in the loop.
         sha = result.get("content", {}).get("sha")
+        last_commit_url = result.get("commit", {}).get("html_url") or last_commit_url
         logger.info("Commit %d/%d: %r", index, count, message)
+
+    return last_commit_url
+
+
+def commit_to_repo(
+    config: dict[str, Any],
+    client: GitHubClient,
+    state: StateStore,
+    logger: Any,
+    *,
+    repo: dict[str, Any],
+    force: bool = False,
+) -> dict[str, Any]:
+    """Commit to an already-chosen repository (used by the web UI).
+
+    ``repo`` is a repository dict (as returned by ``list_owned_repos``).
+    Honours the once-per-day guard unless ``force`` is set. Returns a result
+    dict describing what happened. Raises ``GitHubError`` on API failure.
+    """
+    agent_cfg = config["daily_commit_agent"]
+    today = today_str()
+
+    if not force and already_ran_today(state, today):
+        return {
+            "status": "skipped",
+            "reason": f"Already ran today ({today}). Enable 'force' to override.",
+        }
+
+    user = client.get_authenticated_user()
+    owner = user["login"]
+    repo_name = repo["name"]
+    repo_full = repo["full_name"]
+    branch = repo.get("default_branch") or "main"
+
+    count = decide_commit_count(
+        agent_cfg.get("min_commits_per_run", 1),
+        agent_cfg.get("max_commits_per_run", 3),
+    )
+    logger.info("Committing %d time(s) to %s (branch: %s).", count, repo_full, branch)
+
+    tracking_file = agent_cfg["tracking_file"]
+    messages = agent_cfg.get("commit_messages") or ["chore: update README activity log"]
+    commit_url = _make_commits(
+        client, owner, repo_name, branch, tracking_file, messages, count, logger
+    )
+
+    state.set(_LAST_RUN_DATE, today)
+    state.set(_LAST_REPO, repo_full)
+    state.save()
+    logger.info("Run complete. Made %d commit(s) to %s.", count, repo_full)
+    return {
+        "status": "committed",
+        "repo": repo_full,
+        "branch": branch,
+        "count": count,
+        "file": tracking_file,
+        "commit_url": commit_url,
+    }

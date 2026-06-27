@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GitHub Activity Automation</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">&#9889;</span>
+      <div>
+        <h1>GitHub Activity Automation</h1>
+        <p class="subtitle">A control panel for the Daily Commit &amp; Project Creator agents</p>
+      </div>
+    </div>
+    <div id="statusChips" class="chips">
+      <span class="chip chip-muted" id="chipToken">token: ?</span>
+      <span class="chip chip-muted" id="chipUser">user: ?</span>
+      <button class="chip chip-kill" id="chipKill" title="Toggle kill switch">kill switch: ?</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <main class="grid">
+    <!-- Daily Commit -->
+    <section class="card">
+      <h2>Daily Commit Agent</h2>
+      <p class="muted">Pick a repository and add 1&ndash;3 commits to its README activity log.</p>
+
+      <div class="row">
+        <button id="loadReposBtn" class="btn">Load my repositories</button>
+        <input type="search" id="repoSearch" class="search hidden" placeholder="Filter repositories&hellip;" />
+      </div>
+
+      <div id="repoList" class="repo-list"></div>
+
+      <label class="checkline">
+        <input type="checkbox" id="forceCommit" />
+        Force (ignore the once-per-day guard)
+      </label>
+
+      <button id="commitBtn" class="btn btn-primary" disabled>Commit to selected repo</button>
+      <div id="commitResult" class="result"></div>
+    </section>
+
+    <!-- Project Creator -->
+    <section class="card">
+      <h2>Project Creator Agent</h2>
+      <p class="muted">Generate a starter project, review it, then create the repo.</p>
+
+      <div class="row">
+        <label class="field">
+          <span>Language</span>
+          <select id="langSelect"></select>
+        </label>
+        <button id="proposeBtn" class="btn">Propose a project</button>
+      </div>
+
+      <div id="proposalForm" class="proposal hidden">
+        <label class="field">
+          <span>Repository name</span>
+          <input type="text" id="projName" />
+        </label>
+        <label class="field">
+          <span>Language</span>
+          <select id="projLang"></select>
+        </label>
+        <label class="field">
+          <span>Project idea <em id="ideaSource" class="muted"></em></span>
+          <textarea id="projIdea" rows="3"></textarea>
+        </label>
+        <div class="row">
+          <button id="createBtn" class="btn btn-primary">Create repository</button>
+          <button id="reproposeBtn" class="btn btn-ghost">Re-roll proposal</button>
+        </div>
+      </div>
+      <div id="projectResult" class="result"></div>
+    </section>
+
+    <!-- Logs -->
+    <section class="card card-wide">
+      <div class="row spread">
+        <h2>Activity log</h2>
+        <button id="refreshLogsBtn" class="btn btn-ghost">Refresh</button>
+      </div>
+      <pre id="logBox" class="logbox">Loading&hellip;</pre>
+    </section>
+  </main>
+
+  <footer class="foot muted">
+    Runs locally against your <code>GITHUB_TOKEN</code>. Same actions as the CLI, nothing leaves your machine.
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

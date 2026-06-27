@@ -7,6 +7,8 @@ This is a small toolkit of two scripts that talk to the GitHub REST API and take
 
 Everything that matters is configurable from one JSON file, both scripts log what they do, and there's a kill switch if you ever want them to stop touching your account.
 
+You can drive all of this from the command line, or from a small local web page (`python webapp.py`) that does the same things interactively. See [Web UI](#web-ui).
+
 ## Contents
 
 - [What you need first](#what-you-need-first)
@@ -14,6 +16,7 @@ Everything that matters is configurable from one JSON file, both scripts log wha
 - [Configuration](#configuration)
 - [Getting a GitHub token](#getting-a-github-token)
 - [Running the agents](#running-the-agents)
+- [Web UI](#web-ui)
 - [Scheduling it](#scheduling-it)
 - [The kill switch](#the-kill-switch)
 - [When things go wrong](#when-things-go-wrong)
@@ -33,6 +36,7 @@ There are only three Python dependencies, all in `requirements.txt`:
 
 - `requests` for the HTTP calls
 - `python-dotenv` to read your `.env` file
+- `flask` for the optional web UI
 - `pytest`, which you only need if you want to run the tests
 
 No native libraries or OS-specific tricks, so it works the same on Windows, macOS and Linux.
@@ -211,6 +215,25 @@ Hit `y` to go ahead or `0` to bail. If something's not right, type `1`, `2` or `
 
 If you'd rather not be asked, `--yes` skips the prompt, and it's skipped automatically when there's no terminal attached.
 
+## Web UI
+
+If you'd rather click than type, there's a small web page that does everything the CLIs do. Start it with:
+
+```bash
+python webapp.py
+```
+
+then open <http://127.0.0.1:5000>. It reads the same `GITHUB_TOKEN` and `config.json`, so there's nothing extra to set up. It runs only on localhost; it's meant as a personal control panel, not something to expose to the internet.
+
+What you can do from the page:
+
+- See at a glance whether your token is set, who you're authenticated as, and whether the kill switch is on. The kill-switch chip is a toggle, so you can flip it on or off with one click.
+- **Daily commits:** load your repositories, filter the list, pick one, optionally tick "force", and commit. You get the commit count and a link straight to the commit.
+- **Project creator:** choose a language and hit "Propose". It fills in a name and a project idea that you can edit (or re-roll), then "Create repository" makes it for real and links you to it.
+- Watch the rolling activity log at the bottom, which updates after each action.
+
+The page talks to a handful of small JSON endpoints (`/api/status`, `/api/repos`, `/api/commit`, `/api/project/propose`, `/api/project/create`, `/api/killswitch`, `/api/logs`), all backed by the exact same agent code the CLIs use. You can point the host/port elsewhere with the `WEBAPP_HOST` and `WEBAPP_PORT` environment variables.
+
 ## Scheduling it
 
 Both agents are safe to run on a timer because they won't double up: the commit agent is once-a-day, and the creator only fires every few days. Pick whatever scheduler suits you.
@@ -266,16 +289,17 @@ A few things that tripped me up, and how to fix them:
 
 ```
 GitHub_Automation/
-├── daily_commit.py            # entry point for the Daily Commit Agent
-├── project_creator.py         # entry point for the Project Creator Agent
+├── daily_commit.py            # CLI entry point for the Daily Commit Agent
+├── project_creator.py         # CLI entry point for the Project Creator Agent
+├── webapp.py                  # Flask app for the web UI
 ├── config.json                # all the settings
 ├── requirements.txt           # pinned dependencies
 ├── .env.example               # copy this to .env and add your token
 ├── .gitignore                 # keeps .env, logs/, state/ etc. out of git
 ├── README.md                  # you're reading it
-├── ghauto/                    # the shared code both agents use
+├── ghauto/                    # the shared code the agents and web UI use
 │   ├── __init__.py
-│   ├── bootstrap.py           # loads env + config, builds the client, checks the kill switch
+│   ├── bootstrap.py           # loads env + config, builds the client, checks the kill switch (CLI)
 │   ├── config.py              # reading config.json and resolving paths
 │   ├── logging_setup.py       # file + console logging with timestamps
 │   ├── killswitch.py          # the kill-switch check
@@ -283,7 +307,13 @@ GitHub_Automation/
 │   ├── github_client.py       # the GitHub API client (retries, rate limits, errors)
 │   ├── ideas.py               # AI idea generation with a safe fallback
 │   ├── commit_agent.py        # Daily Commit Agent logic
-│   └── creator_agent.py       # Project Creator Agent logic
+│   ├── creator_agent.py       # Project Creator Agent logic
+│   └── service.py             # web-safe wrapper the Flask app calls into
+├── templates/
+│   └── index.html             # the web UI page
+├── static/
+│   ├── style.css
+│   └── app.js                 # frontend logic (vanilla JS, talks to /api/*)
 ├── tests/
 │   ├── conftest.py
 │   ├── test_repo_selection.py
